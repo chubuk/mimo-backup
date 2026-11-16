@@ -37,7 +37,7 @@ func (u *UI) Ask(prompt, def string) (string, error) {
 	}
 	line, err := u.in.ReadString('\n')
 	if err != nil && line == "" {
-		return "", err
+		return "", inputEnded(err)
 	}
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -55,7 +55,7 @@ func (u *UI) Confirm(prompt string, defYes bool) (bool, error) {
 	fmt.Fprintf(u.out, "%s [%s]: ", prompt, hint)
 	line, err := u.in.ReadString('\n')
 	if err != nil && line == "" {
-		return false, err
+		return false, inputEnded(err)
 	}
 	line = strings.ToLower(strings.TrimSpace(line))
 	switch line {
@@ -83,7 +83,7 @@ func (u *UI) Choose(prompt string, options []string, defIdx int) (int, error) {
 	fmt.Fprintf(u.out, "Выбор [%d]: ", defIdx+1)
 	line, err := u.in.ReadString('\n')
 	if err != nil && line == "" {
-		return 0, err
+		return 0, inputEnded(err)
 	}
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -118,7 +118,7 @@ func (u *UI) ReadPassword(prompt string) (string, error) {
 	line, err := u.in.ReadString('\n')
 	fmt.Fprintln(u.out)
 	if err != nil && line == "" {
-		return "", err
+		return "", inputEnded(err)
 	}
 	return strings.TrimRight(line, "\r\n"), nil
 }
@@ -161,6 +161,19 @@ func (u *UI) ReadPasswordOnce() (string, error) {
 
 // ErrNotTTY reports password input attempted without a terminal.
 var ErrNotTTY = errors.New("нет терминала для ввода пароля: используйте --passphrase-file или $MIMO_BACKUP_PASSPHRASE")
+
+// ErrInputEnded reports that the input stream closed mid-prompt (Ctrl-D or
+// a closed stdin) — an abort, not a failure.
+var ErrInputEnded = errors.New("ввод завершён — отменено")
+
+// inputEnded maps EOF on the input stream to ErrInputEnded so prompts never
+// surface a raw "EOF" to the user.
+func inputEnded(err error) error {
+	if errors.Is(err, io.EOF) {
+		return ErrInputEnded
+	}
+	return err
+}
 
 // FindArchives scans common locations for mimo-backup artifacts and returns
 // candidate archives (main tar.gz and secrets containers) with metadata.

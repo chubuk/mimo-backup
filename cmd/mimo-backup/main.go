@@ -769,6 +769,10 @@ func wizard(log *slog.Logger) int {
 	actions = append(actions, "exit")
 
 	idx, err := u.Choose("Что делаем?", options, 0)
+	if errors.Is(err, ui.ErrInputEnded) {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return exitOK
+	}
 	if err != nil {
 		log.Error(err.Error())
 		return exitUsage
