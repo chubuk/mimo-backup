@@ -45,6 +45,15 @@ func run(args []string) int {
 		return wizard(log)
 	}
 
+	// --help must print the usage once and exit 0: the flag package would
+	// otherwise print it and the empty-command branch would print it again.
+	for _, a := range args {
+		if a == "-h" || a == "-help" || a == "--help" {
+			usage()
+			return exitOK
+		}
+	}
+
 	// Global flags may precede the subcommand.
 	fs := flag.NewFlagSet("mimo-backup", flag.ContinueOnError)
 	verbose := fs.Bool("verbose", false, "подробный вывод")
