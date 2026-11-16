@@ -77,13 +77,9 @@ func Verify(o Options) error {
 		o.Passphrase = pw
 	}
 
-	m, err := readSidecar(o.Src)
+	m, err := resolveManifest(o, sealed)
 	if err != nil {
-		m, err = manifestFromTar(o.Src, o.Passphrase)
-		if err != nil {
-			return fmt.Errorf("манифест не найден ни в sidecar, ни в архиве: %w", err)
-		}
-		o.Log.Warn("боковой манифест не найден — двухпроходный режим (~2x дольше)")
+		return err
 	}
 
 	if o.Quick && !o.Full && !sealed {
@@ -154,13 +150,9 @@ func List(o Options) error {
 		}
 		o.Passphrase = pw
 	}
-	m, err := readSidecar(o.Src)
+	m, err := resolveManifest(o, sourceEncrypted(o.Src))
 	if err != nil {
-		// Fall back to the in-tar manifest (last entry).
-		m, err = manifestFromTar(o.Src, o.Passphrase)
-		if err != nil {
-			return err
-		}
+		return err
 	}
 	fmt.Printf("Создан: %s\nХост: %s, дом: %s\nБД: %s (%s, %d байт)\nФайлов: %d (%.2f ГБ), симлинков %d, пропущено %d\nСекретов: %d → %s (encrypted=%v)\n",
 		m.CreatedAt.Format(time.RFC3339), m.Source.Hostname, m.Source.Home,
@@ -212,13 +204,9 @@ func Restore(o Options) error {
 		o.Passphrase = pw
 	}
 
-	m, err := readSidecar(o.Src)
+	m, err := resolveManifest(o, sourceEncrypted(o.Src))
 	if err != nil {
-		o.Log.Warn("боковой манифест не найден — двухпроходный режим (~2x дольше)", "err", err)
-		m, err = manifestFromTar(o.Src, o.Passphrase)
-		if err != nil {
-			return fmt.Errorf("манифест не найден ни в sidecar, ни в архиве: %w", err)
-		}
+		return err
 	}
 
 	if m.Source.Home != "" && o.Home != "" && m.Source.Home != o.Home {
@@ -652,6 +640,31 @@ func readSidecar(src string) (*manifest.Manifest, error) {
 	}
 	defer f.Close()
 	return manifest.Load(f)
+}
+
+// resolveManifest returns the archive manifest. Sealed containers carry no
+// sidecar by design — it would leak entry names next to the archive — so the
+// in-tar manifest (last entry) is read directly and the extra read pass is
+// expected, not a defect. Only plain .tar.gz archives without their sidecar
+// get the two-pass warning.
+func resolveManifest(o Options, sealed bool) (*manifest.Manifest, error) {
+	if sealed {
+		o.Log.Info("манифест внутри контейнера — архив читается дважды (sidecar не пишется: имена не утекают)")
+		m, err := manifestFromTar(o.Src, o.Passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("манифест из контейнера: %w", err)
+		}
+		return m, nil
+	}
+	m, err := readSidecar(o.Src)
+	if err != nil {
+		o.Log.Warn("боковой манифест не найден — двухпроходный режим (~2x дольше)", "err", err)
+		m, err = manifestFromTar(o.Src, o.Passphrase)
+		if err != nil {
+			return nil, fmt.Errorf("манифест не найден ни в sidecar, ни в архиве: %w", err)
+		}
+	}
+	return m, nil
 }
 
 // manifestFromTar finds the trailing manifest.json in the archive (fallback).

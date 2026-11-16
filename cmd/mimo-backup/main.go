@@ -21,7 +21,7 @@ import (
 )
 
 // version is stamped at build time via -ldflags "-X main.version=X.Y.Z".
-var version = "1.1.2"
+var version = "1.1.3"
 
 const (
 	exitOK       = 0
@@ -193,10 +193,12 @@ func cmdBackup(args []string, log *slog.Logger, yes bool, noProg bool) int {
 	noPass := fs.Bool("no-passphrase", false, "без пароля (незашифрованные секреты)")
 	encrypt := fs.Bool("encrypt", false, "зашифровать весь архив в один .mimosec (данные+опись+секреты)")
 	subNoProg := fs.Bool("no-progress", false, "без ленты прогресса")
+	subYes := fs.Bool("yes", false, "неинтерактивный режим")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	noProg = noProg || *subNoProg
+	yes = yes || *subYes
 	if *dest == "" {
 		fmt.Fprintln(os.Stderr, "--dest обязателен")
 		return exitUsage
@@ -298,10 +300,12 @@ func cmdRestore(args []string, log *slog.Logger, yes bool, noProg bool) int {
 	dryRun := fs.Bool("dry-run", false, "ничего не писать")
 	stopMimo := fs.Bool("stop-mimo", false, "остановить mimo без вопросов")
 	subNoProg := fs.Bool("no-progress", false, "без ленты прогресса")
+	subYes := fs.Bool("yes", false, "неинтерактивный режим")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	noProg = noProg || *subNoProg
+	yes = yes || *subYes
 	if *src == "" {
 		fmt.Fprintln(os.Stderr, "--src обязателен")
 		return exitUsage
@@ -442,9 +446,11 @@ func cmdSecretsPack(args []string, log *slog.Logger, yes bool) int {
 	out := fs.String("out", "", "выходной контейнер")
 	passFile := fs.String("passphrase-file", "", "файл с паролем")
 	noPass := fs.Bool("no-passphrase", false, "без пароля (обычный tar.gz)")
+	subYes := fs.Bool("yes", false, "неинтерактивный режим")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
+	yes = yes || *subYes
 	paths := fs.Args()
 	if *out == "" || len(paths) == 0 {
 		fmt.Fprintln(os.Stderr, "secrets pack --out FILE [--passphrase-file F] PATH...")
@@ -487,9 +493,11 @@ func cmdSecretsUnpack(args []string, log *slog.Logger, yes bool) int {
 	force := fs.Bool("force", false, "перезаписать")
 	passFile := fs.String("passphrase-file", "", "файл с паролем")
 	noPass := fs.Bool("no-passphrase", false, "контейнер без пароля")
+	subYes := fs.Bool("yes", false, "неинтерактивный режим")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
+	yes = yes || *subYes
 	if *src == "" || *out == "" {
 		fmt.Fprintln(os.Stderr, "secrets unpack --src FILE --out DIR [--passphrase-file F]")
 		return exitUsage
