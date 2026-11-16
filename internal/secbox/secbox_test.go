@@ -158,3 +158,66 @@ func TestSealRejectsOversizedPayload(t *testing.T) {
 		t.Fatalf("MaxPayload changed: %d", MaxPayload)
 	}
 }
+
+// --- streaming container (MIMOSEC2) ------------------------------------
+
+func TestStreamRoundTrip(t *testing.T) {
+	// Payload with a non-trivial size: several full chunks + a tail.
+	payload := bytes.Repeat([]byte("mimo-stream-payload-"), 20000) // ~380 KB
+	var sealed bytes.Buffer
+	n, err := SealStream(&sealed, bytes.NewReader(payload), []byte("abc12"), DefaultParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != int64(len(payload)) {
+		t.Fatalf("consumed %d, want %d", n, len(payload))
+	}
+	if !LooksEncrypted(sealed.Bytes()) {
+		t.Fatal("stream magic not detected")
+	}
+	var out bytes.Buffer
+	m, err := OpenStream(&out, bytes.NewReader(sealed.Bytes()), []byte("abc12"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m != int64(len(payload)) || !bytes.Equal(out.Bytes(), payload) {
+		t.Fatalf("round trip mismatch: %d vs %d bytes", m, len(payload))
+	}
+}
+
+func TestStreamEmptyPayload(t *testing.T) {
+	var sealed bytes.Buffer
+	if _, err := SealStream(&sealed, bytes.NewReader(nil), []byte("abc12"), DefaultParams()); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if _, err := OpenStream(&out, bytes.NewReader(sealed.Bytes()), []byte("abc12")); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("empty payload produced %d bytes", out.Len())
+	}
+}
+
+func TestStreamWrongPassphrase(t *testing.T) {
+	var sealed bytes.Buffer
+	if _, err := SealStream(&sealed, strings.NewReader("data"), []byte("abc12"), DefaultParams()); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if _, err := OpenStream(&out, bytes.NewReader(sealed.Bytes()), []byte("wrong1")); err != ErrAuth {
+		t.Fatalf("err = %v, want ErrAuth", err)
+	}
+}
+
+func TestStreamTruncated(t *testing.T) {
+	var sealed bytes.Buffer
+	if _, err := SealStream(&sealed, strings.NewReader("some data here"), []byte("abc12"), DefaultParams()); err != nil {
+		t.Fatal(err)
+	}
+	raw := sealed.Bytes()
+	var out bytes.Buffer
+	if _, err := OpenStream(&out, bytes.NewReader(raw[:len(raw)-5]), []byte("abc12")); err == nil {
+		t.Fatal("truncated stream accepted")
+	}
+}

@@ -19,6 +19,7 @@ type Manifest struct {
 	Source             Source      `json:"source"`
 	DB                 DB          `json:"db"`
 	Secrets            Secrets     `json:"secrets"`
+	ArchiveEncrypted   bool        `json:"archive_encrypted,omitempty"` // whole archive is a .mimosec container
 	Totals             Totals      `json:"totals"`
 	SecretPaths        []string    `json:"secret_paths"`
 	RedactedPaths      []string    `json:"redacted_paths"`
@@ -96,7 +97,7 @@ type FileEntry struct {
 func New() *Manifest {
 	return &Manifest{
 		SchemaVersion: SchemaVersion,
-		Tool:          Tool{Name: "mimo-backup", Version: "1.0.0"},
+		Tool:          Tool{Name: "mimo-backup", Version: "1.1.0"},
 		CreatedAt:     time.Now().UTC(),
 		SecretPaths:   []string{},
 		RedactedPaths: []string{},

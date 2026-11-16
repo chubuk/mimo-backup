@@ -10,6 +10,9 @@ Linux-машинами через USB-архив. Один статически�
 
 - **Всё окружение**: сессии, память, планы, скиллы, конфиги, БД `mimocode.db`, все проекты `~/projects/*`, установка `~/.mimocode` (работа без сети)
 - **Секреты отдельно**: `auth.json`, ключи, токены — в архиве секретов с опциональным паролем (Argon2id + AES-256-GCM)
+- **`--encrypt`**: весь архив в один зашифрованный контейнер `.mimosec` (данные + опись + секреты)
+- **Откат одной командой**: `mimo-backup rollback` возвращает систему как было до восстановления (дерево байт-в-байт)
+- **Git-история настроек**: правки в `~/.config/mimocode/**` и rc-файлах видны в `history`, изменения сохраняются перед откатом
 - **Проверка целостности**: sha256 каждого файла + sha256 всего архива; `verify --quick` / `--full`
 - **Лента прогресса** 0–100% с ETA; имена архивов всегда содержат дату
 - **Интерактивный мастер**: `mimo-backup` без аргументов сам определяет контекст
@@ -19,17 +22,17 @@ Linux-машинами через USB-архив. Один статически�
 ### Linux (deb, amd64/arm64)
 
 ```bash
-sudo dpkg -i mimo-backup_1.0.0_amd64.deb
+sudo dpkg -i mimo-backup_1.1.0_amd64.deb
 ```
 
 ### macOS (pkg, Apple Silicon и Intel)
 
-Универсальный инсталлятор `mimo-backup-1.0.0-macos.pkg` из
+Универсальный инсталлятор `mimo-backup-1.1.0-macos.pkg` из
 [релиза](https://github.com/chubuk/mimo-backup/releases) — работает на
 Mac с чипами M1/M2/M3 (Apple Silicon) и на Intel:
 
 ```bash
-sudo installer -pkg mimo-backup-1.0.0-macos.pkg -target /
+sudo installer -pkg mimo-backup-1.1.0-macos.pkg -target /
 ```
 
 Либо просто положите бинарник в PATH: `mimo-backup-darwin-arm64`
@@ -38,7 +41,7 @@ sudo installer -pkg mimo-backup-1.0.0-macos.pkg -target /
 ### Из исходников (Linux и macOS)
 
 ```bash
-go build -ldflags="-s -w -X main.version=1.0.0" -o ~/.local/bin/mimo-backup ./cmd/mimo-backup
+go build -ldflags="-s -w -X main.version=1.1.0" -o ~/.local/bin/mimo-backup ./cmd/mimo-backup
 ```
 
 ## Быстрый старт
@@ -61,11 +64,18 @@ mimo-backup restore --src /media/chubuk/USB/mimo-backup-*.tar.gz
 | Команда | Что делает |
 |---|---|
 | `mimo-backup` | интерактивный мастер (авто-определение контекста) |
-| `backup` (`b`) | создать архив |
+| `backup` (`b`) | создать архив (`--encrypt` — весь архив в контейнер `.mimosec`) |
 | `restore` (`r`) | восстановить архив (выборочно: данные / + секреты) |
+| `rollback` (`rb`) | откатить последнее восстановление (`--dry-run`, `--yes`) |
 | `verify` (`v`) | проверить архив (`--quick` / `--full`) |
 | `list` (`l`) | сводка манифеста |
+| `history` (`h`) | поколения восстановлений и история настроек (git) |
+| `cleanup` (`c`) | чистка старых поколений (`--keep N`, `--all`) |
+| `fix-nested` (`fn`) | починка машин, восстановленных v1.0.0 (баг с `~/home/`) |
 | `secrets pack\|unpack` | тонкая работа с архивом секретов |
+
+Если машина восстанавливалась на **v1.0.0** и данные легли в `~/home/` —
+запустите `mimo-backup fix-nested --apply` (или см. [SPEC.md](SPEC.md) §10).
 
 Полное описание форматов и флагов — [SPEC.md](SPEC.md).
 

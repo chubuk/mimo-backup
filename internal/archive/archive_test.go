@@ -226,25 +226,27 @@ func TestPartialCommitAndAbort(t *testing.T) {
 	}
 }
 
-func TestJournal(t *testing.T) {
-	dir := t.TempDir()
-	jp := filepath.Join(dir, ".restore-journal.jsonl")
-	j, err := OpenJournal(jp)
-	if err != nil {
-		t.Fatal(err)
+func TestHomeRel(t *testing.T) {
+	ok := map[string]string{
+		"home/.bashrc":                           ".bashrc",
+		"home/.local/share/mimocode/mimocode.db": ".local/share/mimocode/mimocode.db",
+		"home":                                   ".",
+		"home/./x":                               "x",
 	}
-	if err := j.Record("home/a"); err != nil {
-		t.Fatal(err)
+	for in, want := range ok {
+		got, err := HomeRel(in)
+		if err != nil {
+			t.Errorf("HomeRel(%q): %v", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("HomeRel(%q) = %q, want %q", in, got, want)
+		}
 	}
-	if err := j.Record("home/b"); err != nil {
-		t.Fatal(err)
-	}
-	j.Close()
-	b, err := os.ReadFile(jp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cnt := strings.Count(string(b), "\n"); cnt != 2 {
-		t.Fatalf("journal lines = %d", cnt)
+	bad := []string{"", "etc/passwd", "homeless/x", "home2/x", "../home/x", "/etc/x", "home/a/../b"}
+	for _, in := range bad {
+		if _, err := HomeRel(in); err == nil {
+			t.Errorf("HomeRel(%q) accepted, want error", in)
+		}
 	}
 }

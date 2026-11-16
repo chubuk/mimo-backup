@@ -194,7 +194,11 @@ func DiscoverArchives() []ArchiveInfo {
 			}
 		}
 	}
+	return discoverIn(dirs)
+}
 
+// discoverIn scans the given directories for mimo-backup artifacts.
+func discoverIn(dirs []string) []ArchiveInfo {
 	seen := map[string]bool{}
 	var out []ArchiveInfo
 	for _, d := range dirs {
@@ -208,17 +212,24 @@ func DiscoverArchives() []ArchiveInfo {
 			if err != nil || fi.IsDir() {
 				continue
 			}
-			kind := ""
-			switch {
-			case strings.HasSuffix(m, ".tar.gz"):
-				kind = "main"
-			case strings.HasSuffix(m, ".mimosec") || strings.HasSuffix(m, "-secrets.tar.gz"):
-				kind = "secrets"
-			default:
+			kind := classifyArtifact(m)
+			if kind == "" {
 				continue
 			}
 			out = append(out, ArchiveInfo{Path: m, Size: fi.Size(), ModTime: fi.ModTime(), Kind: kind})
 		}
 	}
 	return out
+}
+
+// classifyArtifact reports "secrets" for secrets containers (any suffix,
+// checked first), "main" for the main tar.gz, or "" for non-artifacts.
+func classifyArtifact(p string) string {
+	switch {
+	case strings.HasSuffix(p, ".mimosec"), strings.HasSuffix(p, "-secrets.tar.gz"):
+		return "secrets"
+	case strings.HasSuffix(p, ".tar.gz"):
+		return "main"
+	}
+	return ""
 }

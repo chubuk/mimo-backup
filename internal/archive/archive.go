@@ -151,7 +151,36 @@ func ReadCloser(r io.Reader) (*tar.Reader, io.Closer, error) {
 	return tar.NewReader(gz), gz, nil
 }
 
-// SafeJoin resolves archive entry name (home-relative, e.g. "home/…") under
+// HomePrefix is the archive-name prefix every backup entry carries.
+const HomePrefix = "home/"
+
+// HomeRel maps an archive entry name ("home/…") to its home-relative path,
+// rejecting absolute names, traversal components and entries that do not
+// live under the home prefix. The bare "home" root entry maps to ".".
+func HomeRel(name string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("empty entry name")
+	}
+	if strings.HasPrefix(name, "/") {
+		return "", fmt.Errorf("absolute entry name %q", name)
+	}
+	for _, part := range strings.Split(filepath.ToSlash(name), "/") {
+		if part == ".." {
+			return "", fmt.Errorf("path traversal in entry %q", name)
+		}
+	}
+	clean := filepath.ToSlash(filepath.Clean("/" + name))
+	clean = strings.TrimPrefix(clean, "/")
+	if clean == "home" {
+		return ".", nil
+	}
+	if !strings.HasPrefix(clean, HomePrefix) {
+		return "", fmt.Errorf("entry %q: нет префикса %s", name, HomePrefix)
+	}
+	return strings.TrimPrefix(clean, HomePrefix), nil
+}
+
+// SafeJoin resolves a home-relative entry name (e.g. ".local/…") under
 // destHome, rejecting traversal, absolute names and escapes.
 func SafeJoin(destHome, name string) (string, error) {
 	if name == "" {

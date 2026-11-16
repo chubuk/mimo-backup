@@ -3,6 +3,8 @@ package ui
 import (
 	"bufio"
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -119,5 +121,38 @@ func TestReadPasswordNewInvalidLoops(t *testing.T) {
 	}
 	if pw != "abc12" {
 		t.Fatalf("pw = %q", pw)
+	}
+}
+
+// Bug D: secrets containers must be classified before the generic .tar.gz
+// suffix, and non-artifacts (manifest.json) must be ignored.
+func TestDiscoverInClassifiesSecretsFirst(t *testing.T) {
+	d := t.TempDir()
+	for _, n := range []string{
+		"mimo-backup-a-20260101-000000.tar.gz",
+		"mimo-backup-a-20260101-000000-secrets.tar.gz",
+		"mimo-backup-a-20260101-000000-secrets.mimosec",
+		"mimo-backup-a-20260101-000000.manifest.json",
+	} {
+		if err := os.WriteFile(filepath.Join(d, n), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kinds := map[string]string{}
+	for _, a := range discoverIn([]string{d}) {
+		kinds[filepath.Base(a.Path)] = a.Kind
+	}
+	want := map[string]string{
+		"mimo-backup-a-20260101-000000.tar.gz":          "main",
+		"mimo-backup-a-20260101-000000-secrets.tar.gz":  "secrets",
+		"mimo-backup-a-20260101-000000-secrets.mimosec": "secrets",
+	}
+	for n, w := range want {
+		if kinds[n] != w {
+			t.Errorf("%s: kind = %q, want %q", n, kinds[n], w)
+		}
+	}
+	if _, ok := kinds["mimo-backup-a-20260101-000000.manifest.json"]; ok {
+		t.Error("manifest.json classified as an archive")
 	}
 }

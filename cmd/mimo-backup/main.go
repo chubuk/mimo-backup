@@ -13,13 +13,15 @@ import (
 
 	"github.com/chubuk/mimo-backup/internal/backup"
 	"github.com/chubuk/mimo-backup/internal/env"
+	"github.com/chubuk/mimo-backup/internal/gens"
 	"github.com/chubuk/mimo-backup/internal/restore"
 	"github.com/chubuk/mimo-backup/internal/secbox"
 	"github.com/chubuk/mimo-backup/internal/ui"
+	"github.com/chubuk/mimo-backup/internal/vcs"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=X.Y.Z".
-var version = "1.0.0"
+var version = "1.1.0"
 
 const (
 	exitOK       = 0
@@ -28,6 +30,8 @@ const (
 	exitMimoLive = 3
 	exitVerify   = 4
 	exitPass     = 5
+	exitConflict = 2 // rollback conflicts share the generic error code (distinct message)
+	exitNoGen    = 7
 )
 
 func main() {
@@ -87,6 +91,14 @@ func run(args []string) int {
 		full = "list"
 	case "s":
 		full = "secrets"
+	case "rb":
+		full = "rollback"
+	case "h":
+		full = "history"
+	case "c":
+		full = "cleanup"
+	case "fn":
+		full = "fix-nested"
 	}
 
 	// --quiet also silences the progress bar.
@@ -103,6 +115,14 @@ func run(args []string) int {
 		return cmdList(rest)
 	case "secrets":
 		return cmdSecrets(rest, log, *yes)
+	case "rollback":
+		return cmdRollback(rest, log, *yes)
+	case "history":
+		return cmdHistory(rest, log)
+	case "cleanup":
+		return cmdCleanup(rest, log, *yes)
+	case "fix-nested":
+		return cmdFixNested(rest, log, *yes)
 	case "version", "--version":
 		fmt.Println("mimo-backup", version)
 		return exitOK
@@ -120,16 +140,25 @@ func usage() {
   mimo-backup                  интерактивный мастер
   mimo-backup backup  [флаги]  создать архив (b)
   mimo-backup restore [флаги]  восстановить архив (r)
+  mimo-backup rollback [флаги] откатить последнее восстановление (rb)
   mimo-backup verify  [флаги]  проверить архив (v)
   mimo-backup list    --src F  что в архиве (l)
+  mimo-backup history          поколения и история настроек (h)
+  mimo-backup cleanup [флаги]  чистка поколений (c)
+  mimo-backup fix-nested [флаги] починка машин v1.0.0 (fn)
   mimo-backup secrets pack|unpack ...
 
 Флаги backup:  --dest DIR --home P --label S --hot|--cold --no-secrets
                --secret-glob G --gzip-level N --force --dry-run --stop-mimo
+               --encrypt (весь архив в один .mimosec; --no-passphrase несовместим)
 Флаги restore: --src FILE [--secrets FILE] [--skip-secrets] --home P
                --force [--passphrase-file F] [--no-passphrase]
                --keep-installation-id --restore-shell-rc --dry-run --stop-mimo
-Флаги verify:  --src FILE [--quick|--full] [--secrets FILE]
+Флаги rollback: [--home P] --yes --dry-run --stop-mimo
+Флаги history: [--home P]
+Флаги cleanup: [--home P] --keep N --all --yes
+Флаги fix-nested: [--home P] --apply --yes
+Флаги verify:  --src FILE [--quick|--full] [--secrets FILE] [--passphrase-file F]
 Общие:         --verbose --quiet --yes --no-progress (без ленты прогресса)
 `)
 }
@@ -153,6 +182,7 @@ func cmdBackup(args []string, log *slog.Logger, yes bool, noProg bool) int {
 	stopMimo := fs.Bool("stop-mimo", false, "остановить mimo без вопросов")
 	passFile := fs.String("passphrase-file", "", "файл с паролем секретов")
 	noPass := fs.Bool("no-passphrase", false, "без пароля (незашифрованные секреты)")
+	encrypt := fs.Bool("encrypt", false, "зашифровать весь архив в один .mimosec (данные+опись+секреты)")
 	subNoProg := fs.Bool("no-progress", false, "без ленты прогресса")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -178,7 +208,8 @@ func cmdBackup(args []string, log *slog.Logger, yes bool, noProg bool) int {
 		Hot: *hot, Cold: *cold, NoSecrets: *noSecrets,
 		SecretGlobs: globs, GzipLevel: *gzipLevel,
 		Force: *force, DryRun: *dryRun, StopMimo: *stopMimo,
-		Yes: yes, Log: log, SkipProcGate: skipGate, NoProgress: noProg,
+		Encrypt: *encrypt,
+		Yes:     yes, Log: log, SkipProcGate: skipGate, NoProgress: noProg,
 	}
 	o.ConfirmStopMimo = func() (bool, bool, error) {
 		if !interactive {
@@ -204,6 +235,9 @@ func cmdBackup(args []string, log *slog.Logger, yes bool, noProg bool) int {
 	}
 	o.AskPassphrase = func() (string, error) {
 		if *noPass {
+			if *encrypt {
+				return "", fmt.Errorf("--encrypt требует пароль (уберите --no-passphrase)")
+			}
 			return "", nil
 		}
 		if *passFile != "" {
@@ -215,14 +249,20 @@ func cmdBackup(args []string, log *slog.Logger, yes bool, noProg bool) int {
 			}
 			return env, nil
 		}
+		if *encrypt {
+			if yes {
+				return "", fmt.Errorf("--encrypt: укажите --passphrase-file или $MIMO_BACKUP_PASSPHRASE")
+			}
+			return u.ReadPasswordNew()
+		}
 		if yes {
 			return "", nil // non-interactive without passphrase source: unencrypted
 		}
-		encrypt, err := u.Confirm("Защитить секреты паролем?", true)
+		encryptSecrets, err := u.Confirm("Защитить секреты паролем?", true)
 		if err != nil {
 			return "", err
 		}
-		if !encrypt {
+		if !encryptSecrets {
 			return "", nil
 		}
 		return u.ReadPasswordNew()
@@ -315,6 +355,7 @@ func cmdVerify(args []string, log *slog.Logger, noProg bool) int {
 	quick := fs.Bool("quick", false, "только sha256 архива (по умолчанию)")
 	full := fs.Bool("full", false, "проверка всех файлов")
 	secrets := fs.String("secrets", "", "проверить и архив секретов")
+	passFile := fs.String("passphrase-file", "", "файл с паролем (для .mimosec)")
 	subNoProg := fs.Bool("no-progress", false, "без ленты прогресса")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
@@ -327,7 +368,17 @@ func cmdVerify(args []string, log *slog.Logger, noProg bool) int {
 	if !*quick && !*full {
 		*quick = true
 	}
+	u := ui.New()
 	o := restore.Options{Src: *src, Secrets: *secrets, Quick: *quick, Full: *full, Log: log, NoProgress: noProg}
+	o.AskPassphrase = func(bool) (string, error) {
+		if *passFile != "" {
+			return readPassFile(*passFile)
+		}
+		if env := os.Getenv("MIMO_BACKUP_PASSPHRASE"); env != "" {
+			return env, nil
+		}
+		return u.ReadPasswordOnce()
+	}
 	err := restore.Verify(o)
 	return mapErr(err, log)
 }
@@ -335,6 +386,7 @@ func cmdVerify(args []string, log *slog.Logger, noProg bool) int {
 func cmdList(args []string) int {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	src := fs.String("src", "", "архив")
+	passFile := fs.String("passphrase-file", "", "файл с паролем (для .mimosec)")
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -342,7 +394,18 @@ func cmdList(args []string) int {
 		fmt.Fprintln(os.Stderr, "--src обязателен")
 		return exitUsage
 	}
-	if err := restore.List(restore.Options{Src: *src}); err != nil {
+	u := ui.New()
+	o := restore.Options{Src: *src}
+	o.AskPassphrase = func(bool) (string, error) {
+		if *passFile != "" {
+			return readPassFile(*passFile)
+		}
+		if env := os.Getenv("MIMO_BACKUP_PASSPHRASE"); env != "" {
+			return env, nil
+		}
+		return u.ReadPasswordOnce()
+	}
+	if err := restore.List(o); err != nil {
 		fmt.Fprintln(os.Stderr, "ошибка:", err)
 		return exitError
 	}
@@ -453,6 +516,145 @@ func cmdSecretsUnpack(args []string, log *slog.Logger, yes bool) int {
 }
 
 // ---------------------------------------------------------------------------
+// rollback / history / cleanup / fix-nested
+
+func cmdRollback(args []string, log *slog.Logger, yes bool) int {
+	fs := flag.NewFlagSet("rollback", flag.ContinueOnError)
+	home := fs.String("home", os.Getenv("HOME"), "домашний каталог")
+	dryRun := fs.Bool("dry-run", false, "показать, ничего не меняя")
+	stopMimo := fs.Bool("stop-mimo", false, "остановить mimo без вопросов")
+	subYes := fs.Bool("yes", false, "неинтерактивный режим")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	yes = yes || *subYes
+	skipGate := os.Getenv("MIMO_BACKUP_SKIP_PROC_GATE") == "1"
+	u := ui.New()
+	interactive := isTerminal(os.Stdin)
+
+	o := restore.RollbackOptions{
+		Home: *home, DryRun: *dryRun, Yes: yes, Log: log,
+		StopMimo: *stopMimo, SkipProcGate: skipGate,
+	}
+	o.ConfirmStopMimo = func() (bool, error) {
+		if !interactive {
+			return false, fmt.Errorf("mimo запущена; остановите её и запустите команду снова")
+		}
+		fmt.Fprintln(os.Stderr, "\nmimo сейчас работает — откат конфликтует с ней.")
+		return u.Confirm("Остановить mimo и продолжить?", true)
+	}
+	err := restore.Rollback(o)
+	return mapErr(err, log)
+}
+
+func cmdHistory(args []string, log *slog.Logger) int {
+	fs := flag.NewFlagSet("history", flag.ContinueOnError)
+	home := fs.String("home", os.Getenv("HOME"), "домашний каталог")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	store, err := gens.Open(*home)
+	if err != nil {
+		log.Error(err.Error())
+		return exitError
+	}
+	gs, err := store.Generations()
+	if err != nil {
+		log.Error(err.Error())
+		return exitError
+	}
+	if len(gs) == 0 {
+		fmt.Println("поколений нет (restore ещё не запускался)")
+	} else {
+		fmt.Println("Поколения (новые сверху):")
+		for i := len(gs) - 1; i >= 0; i-- {
+			g := gs[i]
+			fmt.Printf("  %s  %-12s  %s\n", g.Meta.ID, g.Meta.Status, g.Meta.Source)
+		}
+	}
+	if vcs.Available() {
+		repo, err := vcs.Open(store.SettingsRepo(), *home)
+		if err == nil {
+			if commits, err := repo.Log(); err == nil && len(commits) > 0 {
+				fmt.Println("\nИстория настроек (git):")
+				for _, c := range commits {
+					fmt.Printf("  %s  %s  %s\n", c.Hash[:8], c.When.Format("2006-01-02 15:04"), c.Message)
+				}
+			}
+		}
+	}
+	return exitOK
+}
+
+func cmdCleanup(args []string, log *slog.Logger, yes bool) int {
+	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+	home := fs.String("home", os.Getenv("HOME"), "домашний каталог")
+	keep := fs.Int("keep", 3, "сколько новых поколений оставить")
+	all := fs.Bool("all", false, "удалить всё, кроме точки отката")
+	subYes := fs.Bool("yes", false, "неинтерактивный режим")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	yes = yes || *subYes
+	store, err := gens.Open(*home)
+	if err != nil {
+		log.Error(err.Error())
+		return exitError
+	}
+	removed, warnings, err := store.Cleanup(*keep, *all, true) // plan only
+	if err != nil {
+		log.Error(err.Error())
+		return exitError
+	}
+	for _, w := range warnings {
+		log.Warn(w)
+	}
+	if len(removed) == 0 {
+		log.Info("удалять нечего")
+		return exitOK
+	}
+	if !yes {
+		u := ui.New()
+		ok, err := u.Confirm(fmt.Sprintf("Удалить поколения (%d): %s?", len(removed), strings.Join(removed, ", ")), true)
+		if err != nil || !ok {
+			log.Info("отменено")
+			return exitOK
+		}
+	}
+	removed2, _, err := store.Cleanup(*keep, *all, false)
+	if err != nil {
+		log.Error(err.Error())
+		return exitError
+	}
+	log.Info("поколения удалены", "count", len(removed2), "ids", removed2)
+	_ = store.LogEvent(gens.Event{Event: "cleanup", Note: fmt.Sprintf("removed %d", len(removed2))})
+	return exitOK
+}
+
+func cmdFixNested(args []string, log *slog.Logger, yes bool) int {
+	fs := flag.NewFlagSet("fix-nested", flag.ContinueOnError)
+	home := fs.String("home", os.Getenv("HOME"), "домашний каталог")
+	apply := fs.Bool("apply", false, "применить изменения (без флага — dry-run)")
+	subYes := fs.Bool("yes", false, "неинтерактивный режим")
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+	yes = yes || *subYes
+	u := ui.New()
+	interactive := isTerminal(os.Stdin)
+	o := restore.FixNestedOptions{
+		Home: *home, Apply: *apply, Yes: yes, Log: log,
+	}
+	if interactive {
+		o.Confirm = func(prompt string) (bool, error) { return u.Confirm(prompt, true) }
+	}
+	if err := restore.FixNested(o); err != nil {
+		return mapErr(err, log)
+	}
+	return exitOK
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 
 func mapErr(err error, log *slog.Logger) int {
@@ -469,6 +671,12 @@ func mapErr(err error, log *slog.Logger) int {
 	case errors.Is(err, restore.ErrPass), errors.Is(err, secbox.ErrAuth):
 		log.Error(err.Error())
 		return exitPass
+	case errors.Is(err, restore.ErrNoGeneration):
+		log.Error(err.Error())
+		return exitNoGen
+	case errors.Is(err, restore.ErrConflict):
+		log.Error(err.Error())
+		return exitConflict
 	case errors.Is(err, secbox.ErrPassword):
 		log.Error(err.Error())
 		return exitUsage
@@ -532,6 +740,22 @@ func wizard(log *slog.Logger) int {
 		options = append(options, "Проверить архив")
 		actions = append(actions, "verify")
 	}
+	// Rollback/history are offered whenever a store exists.
+	store, _ := gens.Open(env.Discover("").Home)
+	if store != nil {
+		if g, err := store.Latest(); err == nil && g != nil {
+			options = append(options, fmt.Sprintf("Откатить последнее восстановление (%s, %s)", g.Meta.ID, g.Meta.Status))
+			actions = append(actions, "rollback")
+		}
+		if gs, err := store.Generations(); err == nil && len(gs) > 0 {
+			options = append(options, "Посмотреть историю")
+			actions = append(actions, "history")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(env.Discover("").Home, "home")); err == nil {
+		options = append(options, "Починить ~/home (если было)")
+		actions = append(actions, "fix-nested")
+	}
 	options = append(options, "Выйти")
 	actions = append(actions, "exit")
 
@@ -547,30 +771,69 @@ func wizard(log *slog.Logger) int {
 		return wizardBackup(u, log)
 	case "restore", "verify":
 		return wizardRestore(u, log, actions[idx], archives)
+	case "rollback":
+		return wizardRollback(u, log)
+	case "history":
+		return cmdHistory(nil, log)
+	case "fix-nested":
+		return cmdFixNested([]string{}, log, false)
 	}
 	return exitOK
 }
 
-func wizardBackup(u *ui.UI, log *slog.Logger) int {
-	archives := ui.DiscoverArchives()
-	_ = archives
+// wizardRollback shows what would be undone and confirms.
+func wizardRollback(u *ui.UI, log *slog.Logger) int {
+	home := env.Discover("").Home
+	store, err := gens.Open(home)
+	if err != nil {
+		log.Error(err.Error())
+		return exitError
+	}
+	g, err := store.Latest()
+	if err != nil || g == nil {
+		log.Error("нет восстановлений для отката")
+		return exitNoGen
+	}
+	entries, _ := g.Extracted()
+	fmt.Fprintf(os.Stderr, "\nПоколение %s (%s)\nИсточник: %s\nБудут удалены %d записей восстановления, отодвинутые пути вернутся на место.\n",
+		g.Meta.ID, g.Meta.Status, g.Meta.Source, len(entries))
+	ok, err := u.Confirm("Откатить?", true)
+	if err != nil || !ok {
+		log.Info("отменено")
+		return exitOK
+	}
+	return cmdRollback([]string{"--home", home}, log, true)
+}
 
+func wizardBackup(u *ui.UI, log *slog.Logger) int {
 	dest, err := u.Ask("Куда писать архив (каталог USB)", "")
 	if err != nil || dest == "" {
 		log.Error("каталог назначения не указан")
 		return exitUsage
 	}
+
+	// 1) Secrets, 2) whole-archive encryption, 3) secrets-only password.
 	withSecrets, err := u.Confirm("Сохранять секреты (auth.json, ключи, токены)?", true)
 	if err != nil {
 		return exitUsage
 	}
+	encryptAll, err := u.Confirm("Зашифровать весь архив паролем? (один контейнер .mimosec)", true)
+	if err != nil {
+		return exitUsage
+	}
 	passphrase := ""
-	if withSecrets {
-		encrypt, err := u.Confirm("Защитить секреты паролем?", true)
+	if encryptAll {
+		fmt.Fprintln(os.Stderr, "Пароль для всего архива (при распаковке спросится в начале):")
+		passphrase, err = u.ReadPasswordNew()
 		if err != nil {
 			return exitUsage
 		}
-		if encrypt {
+	} else if withSecrets {
+		encryptSecrets, err := u.Confirm("Защитить паролем только секреты?", true)
+		if err != nil {
+			return exitUsage
+		}
+		if encryptSecrets {
 			passphrase, err = u.ReadPasswordNew()
 			if err != nil {
 				return exitUsage
@@ -581,6 +844,7 @@ func wizardBackup(u *ui.UI, log *slog.Logger) int {
 	o := backup.Options{
 		Dest: dest, Home: env.Discover("").Home,
 		NoSecrets: !withSecrets,
+		Encrypt:   encryptAll,
 		Log:       log,
 	}
 	pw := passphrase

@@ -37,6 +37,9 @@ type Options struct {
 	DryRun      bool
 	StopMimo    bool
 	Yes         bool
+	// Encrypt seals the whole main archive into one .mimosec container
+	// (data + manifest + secrets). No sidecar, no separate secrets artifact.
+	Encrypt bool
 	// Interactive hooks (nil = non-interactive).
 	ConfirmStopMimo func() (stop bool, hot bool, err error) // returns user's choice
 	AskPassphrase   func() (string, error)                  // twice-validated passphrase or "" for none
@@ -61,6 +64,19 @@ type item struct {
 }
 
 const stagingPrefix = ".mimo-backup-staging-"
+
+// dbArchivePath is the archive name of the main database file.
+const dbArchivePath = "home/.local/share/mimocode/mimocode.db"
+
+// isStaleDBSidecar reports whether rel is a mimocode.db WAL/SHM sidecar
+// that must not travel with a vacuum-into snapshot: those files belong to
+// the live database and would corrupt the compacted snapshot on open.
+func isStaleDBSidecar(rel, method string) bool {
+	if method != "vacuum-into" {
+		return false
+	}
+	return rel == dbArchivePath+"-wal" || rel == dbArchivePath+"-shm"
+}
 
 // Run executes a full backup.
 func Run(o Options) error {
@@ -179,31 +195,64 @@ func Run(o Options) error {
 		return err
 	}
 
-	// --- secrets archive ------------------------------------------------
+	// --- encryption passphrase (whole archive) --------------------------
+	passphrase := ""
+	if o.Encrypt {
+		if o.AskPassphrase == nil {
+			return fmt.Errorf("--encrypt требует ввода пароля")
+		}
+		p, err := o.AskPassphrase()
+		if err != nil {
+			return err
+		}
+		if p == "" {
+			return fmt.Errorf("--encrypt: пароль не задан (без пароля уберите --encrypt)")
+		}
+		passphrase = p
+		m.ArchiveEncrypted = true
+	}
+
+	// --- secrets ---------------------------------------------------------
+	// With --encrypt the secrets travel inside the sealed container as
+	// plain entries (no separate artifact, no redaction needed).
 	secretsItems := filterSecrets(items)
-	if o.NoSecrets {
+	switch {
+	case o.Encrypt:
+		if o.NoSecrets && len(secretsItems) > 0 {
+			o.Log.Warn("--no-secrets: секреты пропущены", "paths", secretRels(secretsItems))
+		}
+		m.Secrets = manifest.Secrets{Present: false}
+	case o.NoSecrets:
 		if len(secretsItems) > 0 {
 			o.Log.Warn("--no-secrets: секреты пропущены", "paths", secretRels(secretsItems))
 		}
 		m.Secrets = manifest.Secrets{Present: false}
-	} else if len(secretsItems) > 0 {
+	case len(secretsItems) > 0:
 		o.Log.Info("секреты…")
 		if err := writeSecretsArchive(o, secretsItems, m); err != nil {
 			return err
 		}
+	default:
+		o.Log.Warn("секрет-файлы (auth.json, ключи, токены) не найдены — архив секретов не создан, пароль не используется")
+		m.Secrets = manifest.Secrets{Present: false}
 	}
 
 	// --- main archive ---------------------------------------------------
 	mainPath := filepath.Join(o.Dest, "mimo-backup-"+o.Label+".tar.gz")
+	if o.Encrypt {
+		mainPath = filepath.Join(o.Dest, "mimo-backup-"+o.Label+".mimosec")
+	}
 	if _, err := os.Stat(mainPath); err == nil && !o.Force {
 		return fmt.Errorf("%s уже существует (use --force)", mainPath)
 	}
-	if err := writeMainArchive(o, roots, items, staging, m, mainPath); err != nil {
+	if err := writeMainArchive(o, roots, items, staging, m, mainPath, passphrase); err != nil {
 		return err
 	}
 
-	// --- sidecar manifest ----------------------------------------------
-	writeSidecar(o, m, mainPath)
+	// --- sidecar manifest (not for containers: the manifest is inside) ---
+	if !o.Encrypt {
+		writeSidecar(o, m, mainPath)
+	}
 	o.Log.Info("backup готов",
 		"main", mainPath,
 		"secrets", m.Secrets.Filename,
@@ -570,8 +619,10 @@ func writeSecretsArchive(o Options, secrets []item, m *manifest.Manifest) error 
 }
 
 // writeMainArchive streams every non-secret item into the main tar.gz,
-// hashing on the fly; the manifest is the final entry.
-func writeMainArchive(o Options, roots env.Roots, items []item, staging string, m *manifest.Manifest, outPath string) error {
+// hashing on the fly; the manifest is the final entry. With a passphrase
+// the stream is sealed into a .mimosec container (no sidecar).
+func writeMainArchive(o Options, roots env.Roots, items []item, staging string, m *manifest.Manifest, outPath, passphrase string) error {
+	includeRawSecrets := o.Encrypt && !o.NoSecrets
 	pf, err := archive.CreatePartial(outPath)
 	if err != nil {
 		return err
@@ -584,7 +635,16 @@ func writeMainArchive(o Options, roots env.Roots, items []item, staging string, 
 	}()
 
 	hasher := sha256.New()
-	dest := io.MultiWriter(pf, hasher)
+	var sink io.Writer = pf
+	var sealer *secbox.Sealer
+	if passphrase != "" {
+		sealer, err = secbox.NewSealer(pf, []byte(passphrase), secbox.DefaultParams())
+		if err != nil {
+			return err
+		}
+		sink = sealer
+	}
+	dest := io.MultiWriter(sink, hasher)
 	w, err := archive.NewWriter(dest, o.GzipLevel)
 	if err != nil {
 		return err
@@ -595,8 +655,11 @@ func writeMainArchive(o Options, roots env.Roots, items []item, staging string, 
 	var barTotalBytes int64
 	var barTotalFiles int
 	for _, it := range items {
-		if it.secret && !it.redact {
+		if it.secret && !it.redact && !includeRawSecrets {
 			continue
+		}
+		if isStaleDBSidecar(it.rel, m.DB.Method) {
+			continue // stale WAL/SHM must not shadow the vacuum-into snapshot
 		}
 		if it.kind == "file" {
 			if it.rel == "home/.local/share/mimocode/mimocode.db" && m.DB.Method == "vacuum-into" {
@@ -616,19 +679,32 @@ func writeMainArchive(o Options, roots env.Roots, items []item, staging string, 
 	defer bar.Abort()
 
 	for _, it := range items {
-		if it.secret && !it.redact {
+		if it.secret {
+			m.SecretPaths = append(m.SecretPaths, it.rel)
+		}
+		if it.secret && !it.redact && !includeRawSecrets {
 			continue // secrets-only file: lives in the secrets archive
+		}
+		if isStaleDBSidecar(it.rel, m.DB.Method) {
+			continue
 		}
 		switch it.kind {
 		case "dir":
 			if err := w.AddDir(it.rel, it.mode, it.mtime); err != nil {
 				return err
 			}
+			m.Files = append(m.Files, manifest.FileEntry{
+				Path: it.rel, Type: "dir", Mode: fmt.Sprintf("%04o", it.mode&0o777), MTime: it.mtime,
+			})
 			m.Totals.Dirs++
 		case "symlink":
 			if err := w.AddSymlink(it.rel, it.link, it.mode, it.mtime); err != nil {
 				return err
 			}
+			m.Files = append(m.Files, manifest.FileEntry{
+				Path: it.rel, Type: "symlink", LinkTarget: it.link,
+				Mode: fmt.Sprintf("%04o", it.mode&0o777), MTime: it.mtime,
+			})
 			m.Totals.Symlinks++
 		case "file":
 			// DB snapshot handling: hot snapshot lives in staging, cold trio streams.
@@ -640,7 +716,7 @@ func writeMainArchive(o Options, roots env.Roots, items []item, staging string, 
 			var r io.Reader
 			var f *os.File
 			var data []byte
-			if it.redact {
+			if it.redact && !includeRawSecrets {
 				data, err = os.ReadFile(it.abs)
 				if err != nil {
 					return err
@@ -685,9 +761,6 @@ func writeMainArchive(o Options, roots env.Roots, items []item, staging string, 
 			m.Totals.Bytes += it.size
 			bar.NextFile()
 		}
-		if it.secret {
-			m.SecretPaths = append(m.SecretPaths, it.rel)
-		}
 	}
 
 	// Manifest as the final entry (buffered: tar needs the size upfront).
@@ -700,6 +773,11 @@ func writeMainArchive(o Options, roots env.Roots, items []item, staging string, 
 	}
 	if err := w.Close(); err != nil {
 		return err
+	}
+	if sealer != nil {
+		if err := sealer.Close(); err != nil {
+			return err
+		}
 	}
 	if err := pf.Commit(); err != nil {
 		return err

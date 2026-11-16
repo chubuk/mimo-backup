@@ -4,7 +4,7 @@ _mimo_backup() {
     COMPREPLY=()
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
-    cmds="backup b restore r verify v list l secrets s version"
+    cmds="backup b restore r rollback rb verify v list l history h cleanup c fix-nested fn secrets s version"
 
     if [[ ${COMP_CWORD} -eq 1 ]]; then
         COMPREPLY=( $(compgen -W "${cmds}" -- "${cur}") )
@@ -21,7 +21,7 @@ _mimo_backup() {
     local flags="--dest --home --label --hot --cold --no-secrets --secret-glob \
 --gzip-level --force --dry-run --stop-mimo --src --secrets --skip-secrets \
 --keep-installation-id --restore-shell-rc --quick --full --passphrase-file \
---no-passphrase --verbose --quiet --yes"
+--no-passphrase --encrypt --keep --all --apply --verbose --quiet --yes --no-progress"
     COMPREPLY=( $(compgen -W "${flags}" -- "${cur}") )
 }
 complete -F _mimo_backup mimo-backup
