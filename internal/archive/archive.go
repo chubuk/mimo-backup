@@ -209,16 +209,23 @@ func SafeJoin(destHome, name string) (string, error) {
 }
 
 // MkdirAllSafe creates parent directories of full, verifying that no existing
-// path component is a symlink (symlink-parent zip-slip protection).
-func MkdirAllSafe(full string) error {
-	dest := filepath.Dir(full)
-	parts := strings.Split(dest, string(os.PathSeparator))
-	cur := string(os.PathSeparator)
-	if !filepath.IsAbs(dest) {
-		cur = "."
-		parts = strings.Split(dest, string(os.PathSeparator))
+// path component below root is a symlink (symlink-parent zip-slip protection).
+// Root and its own parents are OS-managed and may legitimately be symlinks
+// (macOS /var -> /private/var), so they are neither inspected nor rejected.
+func MkdirAllSafe(root, full string) error {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return fmt.Errorf("mkdir root %s: %w", root, err)
 	}
-	for _, p := range parts {
+	dest := filepath.Dir(full)
+	rel, err := filepath.Rel(root, dest)
+	if err != nil {
+		return fmt.Errorf("rel %s to %s: %w", dest, root, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return fmt.Errorf("%s is outside destination root %s", full, root)
+	}
+	cur := root
+	for _, p := range strings.Split(rel, string(os.PathSeparator)) {
 		if p == "" || p == "." {
 			continue
 		}
@@ -241,9 +248,9 @@ func MkdirAllSafe(full string) error {
 }
 
 // CreateFileSafe creates full for writing, refusing symlinks on the final
-// component and in parents.
-func CreateFileSafe(full string, mode fs.FileMode) (*os.File, error) {
-	if err := MkdirAllSafe(full); err != nil {
+// component and in parents below root.
+func CreateFileSafe(root, full string, mode fs.FileMode) (*os.File, error) {
+	if err := MkdirAllSafe(root, full); err != nil {
 		return nil, err
 	}
 	fi, err := os.Lstat(full)

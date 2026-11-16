@@ -154,10 +154,15 @@ func isAlive(pid int) bool {
 		return false
 	}
 	// kill 0 succeeds on zombies too; check the /proc state field when
-	// available (Linux). On macOS there is no /proc — trust kill 0.
+	// available (Linux). On macOS there is no /proc — ask ps instead,
+	// otherwise a killed-but-unreaped child looks alive forever.
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
-		return true
+		out, perr := exec.Command("ps", "-o", "state=", "-p", strconv.Itoa(pid)).Output()
+		if perr != nil {
+			return false // ps exits non-zero when the pid is gone
+		}
+		return !strings.HasPrefix(strings.TrimSpace(string(out)), "Z")
 	}
 	// Format: pid (comm) state ...
 	s := string(b)

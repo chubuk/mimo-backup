@@ -124,7 +124,15 @@ func TestFreeBytes(t *testing.T) {
 }
 
 func TestSnapshotDBRejectsBadPath(t *testing.T) {
-	err := SnapshotDB("/home/chubuk", "/tmp/has;semicolon")
+	home := t.TempDir()
+	mimoDir := filepath.Join(home, ".mimocode", "bin")
+	if err := os.MkdirAll(mimoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mimoDir, "mimo"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := SnapshotDB(home, "/tmp/has;semicolon")
 	if err == nil || !strings.Contains(err.Error(), "illegal character") {
 		t.Fatalf("err = %v", err)
 	}

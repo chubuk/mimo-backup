@@ -88,10 +88,10 @@ func TestWriteReadRoundTrip(t *testing.T) {
 			t.Fatalf("SafeJoin: %v", err)
 		}
 		if hdr.Typeflag == tar.TypeReg {
-			if err := MkdirAllSafe(full); err != nil {
+			if err := MkdirAllSafe(dst, full); err != nil {
 				t.Fatal(err)
 			}
-			f, err := CreateFileSafe(full, os.FileMode(hdr.Mode))
+			f, err := CreateFileSafe(dst, full, os.FileMode(hdr.Mode))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -176,9 +176,30 @@ func TestSymlinkParentRejected(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Writing home/link/file must fail: "link" parent is a symlink.
-	err := MkdirAllSafe(filepath.Join(dst, "link", "file.txt"))
+	err := MkdirAllSafe(dst, filepath.Join(dst, "link", "file.txt"))
 	if err == nil {
 		t.Fatalf("symlink parent accepted")
+	}
+}
+
+func TestSymlinkAboveRootIgnored(t *testing.T) {
+	// macOS temp dirs live under /var (a symlink to /private/var): parents
+	// above the destination root must not trip the safety check.
+	base := t.TempDir()
+	real := filepath.Join(base, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(link, "home") // reached through a symlinked parent
+	if err := MkdirAllSafe(root, filepath.Join(root, "a", "b.txt")); err != nil {
+		t.Fatalf("symlinked parent above root rejected: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(real, "home", "a")); err != nil {
+		t.Fatalf("dirs not created under real path: %v", err)
 	}
 }
 
@@ -191,7 +212,7 @@ func TestCreateFileSafeRefusesSymlinkFinal(t *testing.T) {
 	if err := os.Symlink(target, filepath.Join(dst, "sym")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CreateFileSafe(filepath.Join(dst, "sym"), 0o644); err == nil {
+	if _, err := CreateFileSafe(dst, filepath.Join(dst, "sym"), 0o644); err == nil {
 		t.Fatalf("symlink final component accepted")
 	}
 }

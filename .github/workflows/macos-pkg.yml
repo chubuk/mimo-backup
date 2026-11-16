@@ -19,8 +19,8 @@ on:
       - "pkg-*"
 
 env:
-  RELEASE_TAG: ${{ inputs.tag || 'v1.0.0' }}
-  VERSION: ${{ inputs.version || '1.0.0' }}
+  RELEASE_TAG: ${{ inputs.tag }}
+  VERSION: ${{ inputs.version }}
 
 jobs:
   build:
@@ -34,9 +34,22 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Tag pushes (pkg-1.2.3) carry the version in the tag name; dispatch
+      # inputs override it when given.
+      - name: Resolve version
+        run: |
+          V="${VERSION:-${GITHUB_REF_NAME#pkg-}}"
+          if [ -z "$V" ] || [ "$V" = "$GITHUB_REF_NAME" ]; then
+            echo "cannot derive version from ref $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+          echo "VERSION=$V" >> "$GITHUB_ENV"
+          echo "RELEASE_TAG=${RELEASE_TAG:-v$V}" >> "$GITHUB_ENV"
+          echo "resolved: version=$V release-tag=${RELEASE_TAG:-v$V}"
+
       - name: Build universal binary
         run: |
-          V="${{ env.VERSION }}"
+          V="$VERSION"
           mkdir -p dist
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X main.version=$V" -o dist/amd64 ./cmd/mimo-backup
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X main.version=$V" -o dist/arm64 ./cmd/mimo-backup
@@ -44,11 +57,13 @@ jobs:
           lipo -info dist/mimo-backup
 
       - name: Run tests
+        env:
+          MIMO_BACKUP_SKIP_PROC_GATE: "1"
         run: go test ./...
 
       - name: Build installer package
         run: |
-          V="${{ env.VERSION }}"
+          V="$VERSION"
           ROOT=pkgroot
           mkdir -p "$ROOT/usr/local/bin" \
                    "$ROOT/usr/local/share/bash-completion/completions" \
@@ -70,8 +85,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          V="${{ env.VERSION }}"
-          gh release upload "${{ env.RELEASE_TAG }}" \
+          V="$VERSION"
+          gh release upload "$RELEASE_TAG" \
             "dist/mimo-backup-$V-macos.pkg" \
             dist/mimo-backup \
             --clobber

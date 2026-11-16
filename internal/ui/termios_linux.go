@@ -15,7 +15,8 @@ func termiosGet(fd int) (*termios, bool, error) {
 	var t termios
 	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), syscall.TCGETS, uintptr(unsafe.Pointer(&t)), 0, 0, 0)
 	if errno != 0 {
-		if errno == syscall.ENOTTY {
+		switch errno {
+		case syscall.ENOTTY, syscall.ENODEV, syscall.EOPNOTSUPP:
 			return nil, false, nil // not a tty: echo-off is impossible, read plainly
 		}
 		return nil, false, fmt.Errorf("tcgets: %w", errno)

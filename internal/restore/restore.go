@@ -356,7 +356,7 @@ func (d *dirRecorder) Ensure(rel, full string) error {
 			created = append(created, chain[i])
 		}
 	}
-	if err := archive.MkdirAllSafe(full); err != nil {
+	if err := archive.MkdirAllSafe(d.base, full); err != nil {
 		return err
 	}
 	for _, p := range chain {
@@ -504,7 +504,7 @@ func extract(o Options, m *manifest.Manifest, g *gens.Generation, verifyOnly boo
 				if err = rec.Ensure(rel, full); err != nil {
 					return err
 				}
-				out, err = archive.CreateFileSafe(full, os.FileMode(hdr.Mode))
+				out, err = archive.CreateFileSafe(base, full, os.FileMode(hdr.Mode))
 				if err != nil {
 					return err
 				}
@@ -979,7 +979,7 @@ func restoreSecrets(o Options, m *manifest.Manifest, g *gens.Generation, secPath
 		if err := rec.Ensure(rel, full); err != nil {
 			return err
 		}
-		out, err := archive.CreateFileSafe(full, 0o600)
+		out, err := archive.CreateFileSafe(o.Home, full, 0o600)
 		if err != nil {
 			return err
 		}

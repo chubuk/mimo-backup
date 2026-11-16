@@ -136,10 +136,10 @@ func secretsUnpack(src, out, passphrase string, force bool) error {
 		if err != nil {
 			return fmt.Errorf("secrets: %v", err)
 		}
-		if err := archive.MkdirAllSafe(full); err != nil {
+		if err := archive.MkdirAllSafe(out, full); err != nil {
 			return err
 		}
-		f, err := archive.CreateFileSafe(full, 0o600)
+		f, err := archive.CreateFileSafe(out, full, 0o600)
 		if err != nil {
 			return err
 		}
