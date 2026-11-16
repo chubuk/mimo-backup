@@ -1,0 +1,14 @@
+# Build artifacts
+/bin/
+/dist/
+*.deb
+
+# Go
+/vendor/
+
+# Editor / OS
+*.swp
+.DS_Store
+
+# Agent metadata (не для репозитория)
+.mimocode/

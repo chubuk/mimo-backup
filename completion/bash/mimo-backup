@@ -1,0 +1,27 @@
+# bash-completion для mimo-backup
+_mimo_backup() {
+    local cur prev cmds
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    cmds="backup b restore r verify v list l secrets s version"
+
+    if [[ ${COMP_CWORD} -eq 1 ]]; then
+        COMPREPLY=( $(compgen -W "${cmds}" -- "${cur}") )
+        return 0
+    fi
+
+    case "${prev}" in
+        --dest|--out|--home)
+            COMPREPLY=( $(compgen -d -- "${cur}") ); return 0 ;;
+        --src|--secrets|--passphrase-file)
+            COMPREPLY=( $(compgen -f -- "${cur}") ); return 0 ;;
+    esac
+
+    local flags="--dest --home --label --hot --cold --no-secrets --secret-glob \
+--gzip-level --force --dry-run --stop-mimo --src --secrets --skip-secrets \
+--keep-installation-id --restore-shell-rc --quick --full --passphrase-file \
+--no-passphrase --verbose --quiet --yes"
+    COMPREPLY=( $(compgen -W "${flags}" -- "${cur}") )
+}
+complete -F _mimo_backup mimo-backup
