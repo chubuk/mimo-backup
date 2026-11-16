@@ -130,6 +130,7 @@ func TestDiscoverInClassifiesSecretsFirst(t *testing.T) {
 	d := t.TempDir()
 	for _, n := range []string{
 		"mimo-backup-a-20260101-000000.tar.gz",
+		"mimo-backup-a-20260101-000000.mimosec",
 		"mimo-backup-a-20260101-000000-secrets.tar.gz",
 		"mimo-backup-a-20260101-000000-secrets.mimosec",
 		"mimo-backup-a-20260101-000000.manifest.json",
@@ -144,6 +145,7 @@ func TestDiscoverInClassifiesSecretsFirst(t *testing.T) {
 	}
 	want := map[string]string{
 		"mimo-backup-a-20260101-000000.tar.gz":          "main",
+		"mimo-backup-a-20260101-000000.mimosec":         "main",
 		"mimo-backup-a-20260101-000000-secrets.tar.gz":  "secrets",
 		"mimo-backup-a-20260101-000000-secrets.mimosec": "secrets",
 	}

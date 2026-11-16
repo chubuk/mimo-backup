@@ -21,7 +21,7 @@ import (
 )
 
 // version is stamped at build time via -ldflags "-X main.version=X.Y.Z".
-var version = "1.1.1"
+var version = "1.1.2"
 
 const (
 	exitOK       = 0
@@ -671,6 +671,9 @@ func mapErr(err error, log *slog.Logger) int {
 		return exitOK
 	}
 	switch {
+	case errors.Is(err, ui.ErrInputEnded):
+		fmt.Fprintln(os.Stderr, err.Error())
+		return exitOK
 	case errors.Is(err, restore.ErrMimoLive):
 		log.Error(err.Error())
 		return exitMimoLive
@@ -693,6 +696,17 @@ func mapErr(err error, log *slog.Logger) int {
 		log.Error(err.Error())
 		return exitError
 	}
+}
+
+// askExit maps a failed interactive prompt to an exit code: a closed input
+// stream is a clean abort, anything else is a usage error.
+func askExit(log *slog.Logger, err error) int {
+	if errors.Is(err, ui.ErrInputEnded) {
+		fmt.Fprintln(os.Stderr, err.Error())
+		return exitOK
+	}
+	log.Error(err.Error())
+	return exitUsage
 }
 
 func readPassFile(path string) (string, error) {
@@ -743,7 +757,16 @@ func wizard(log *slog.Logger) int {
 		options = append(options, "Создать бэкап этой машины")
 		actions = append(actions, "backup")
 	}
-	if len(archives) > 0 {
+	// Restore/verify need a MAIN archive; a secrets sidecar alone is not
+	// restorable (it would only produce "архивы не найдены" later).
+	haveMain := false
+	for _, a := range archives {
+		if a.Kind == "main" {
+			haveMain = true
+			break
+		}
+	}
+	if haveMain {
 		options = append(options, "Восстановить из архива")
 		actions = append(actions, "restore")
 		options = append(options, "Проверить архив")
@@ -769,13 +792,8 @@ func wizard(log *slog.Logger) int {
 	actions = append(actions, "exit")
 
 	idx, err := u.Choose("Что делаем?", options, 0)
-	if errors.Is(err, ui.ErrInputEnded) {
-		fmt.Fprintln(os.Stderr, err.Error())
-		return exitOK
-	}
 	if err != nil {
-		log.Error(err.Error())
-		return exitUsage
+		return askExit(log, err)
 	}
 	switch actions[idx] {
 	case "exit":
@@ -820,7 +838,10 @@ func wizardRollback(u *ui.UI, log *slog.Logger) int {
 
 func wizardBackup(u *ui.UI, log *slog.Logger) int {
 	dest, err := u.Ask("Куда писать архив (каталог USB)", "")
-	if err != nil || dest == "" {
+	if err != nil {
+		return askExit(log, err)
+	}
+	if dest == "" {
 		log.Error("каталог назначения не указан")
 		return exitUsage
 	}
@@ -828,28 +849,28 @@ func wizardBackup(u *ui.UI, log *slog.Logger) int {
 	// 1) Secrets, 2) whole-archive encryption, 3) secrets-only password.
 	withSecrets, err := u.Confirm("Сохранять секреты (auth.json, ключи, токены)?", true)
 	if err != nil {
-		return exitUsage
+		return askExit(log, err)
 	}
 	encryptAll, err := u.Confirm("Зашифровать весь архив паролем? (один контейнер .mimosec)", true)
 	if err != nil {
-		return exitUsage
+		return askExit(log, err)
 	}
 	passphrase := ""
 	if encryptAll {
 		fmt.Fprintln(os.Stderr, "Пароль для всего архива (при распаковке спросится в начале):")
 		passphrase, err = u.ReadPasswordNew()
 		if err != nil {
-			return exitUsage
+			return askExit(log, err)
 		}
 	} else if withSecrets {
 		encryptSecrets, err := u.Confirm("Защитить паролем только секреты?", true)
 		if err != nil {
-			return exitUsage
+			return askExit(log, err)
 		}
 		if encryptSecrets {
 			passphrase, err = u.ReadPasswordNew()
 			if err != nil {
-				return exitUsage
+				return askExit(log, err)
 			}
 		}
 	}
@@ -897,35 +918,37 @@ func wizardRestore(u *ui.UI, log *slog.Logger, action string, archives []ui.Arch
 	}
 	idx, err := u.Choose("Выберите архив", opts, 0)
 	if err != nil {
-		return exitUsage
+		return askExit(log, err)
 	}
 	src := mains[idx].Path
 
-	if action == "verify" {
-		return mapErr(restore.Verify(restore.Options{Src: src, Quick: true, Log: log}), log)
-	}
-
-	withSecrets, err := u.Confirm("Восстанавливать секреты?", true)
-	if err != nil {
-		return exitUsage
-	}
 	o := restore.Options{
-		Src:         src,
-		SkipSecrets: !withSecrets,
-		Home:        env.Discover("").Home,
-		Force:       true,
-		Log:         log,
-	}
-	o.ConfirmStopMimo = func() (bool, error) {
-		fmt.Fprintln(os.Stderr, "\nmimo сейчас работает и мешает распаковке.")
-		ok, err := u.Confirm("Остановить mimo и продолжить?", true)
-		return ok, err
+		Src:   src,
+		Home:  env.Discover("").Home,
+		Force: true,
+		Log:   log,
 	}
 	o.AskPassphrase = func(encrypted bool) (string, error) {
 		if !encrypted {
 			return "", nil
 		}
 		return u.ReadPasswordOnce()
+	}
+
+	if action == "verify" {
+		o.Quick = true
+		return mapErr(restore.Verify(o), log)
+	}
+
+	withSecrets, err := u.Confirm("Восстанавливать секреты?", true)
+	if err != nil {
+		return askExit(log, err)
+	}
+	o.SkipSecrets = !withSecrets
+	o.ConfirmStopMimo = func() (bool, error) {
+		fmt.Fprintln(os.Stderr, "\nmimo сейчас работает и мешает распаковке.")
+		ok, err := u.Confirm("Остановить mimo и продолжить?", true)
+		return ok, err
 	}
 	if err := restore.Restore(o); err != nil {
 		return mapErr(err, log)

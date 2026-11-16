@@ -22,17 +22,17 @@ Linux-машинами через USB-архив. Один статически�
 ### Linux (deb, amd64/arm64)
 
 ```bash
-sudo dpkg -i mimo-backup_1.1.1_amd64.deb
+sudo dpkg -i mimo-backup_1.1.2_amd64.deb
 ```
 
 ### macOS (pkg, Apple Silicon и Intel)
 
-Универсальный инсталлятор `mimo-backup-1.1.1-macos.pkg` из
+Универсальный инсталлятор `mimo-backup-1.1.2-macos.pkg` из
 [релиза](https://github.com/chubuk/mimo-backup/releases) — работает на
 Mac с чипами M1/M2/M3 (Apple Silicon) и на Intel:
 
 ```bash
-sudo installer -pkg mimo-backup-1.1.1-macos.pkg -target /
+sudo installer -pkg mimo-backup-1.1.2-macos.pkg -target /
 ```
 
 Либо просто положите бинарник в PATH: `mimo-backup-darwin-arm64`
@@ -41,7 +41,7 @@ sudo installer -pkg mimo-backup-1.1.1-macos.pkg -target /
 ### Из исходников (Linux и macOS)
 
 ```bash
-go build -ldflags="-s -w -X main.version=1.1.1" -o ~/.local/bin/mimo-backup ./cmd/mimo-backup
+go build -ldflags="-s -w -X main.version=1.1.2" -o ~/.local/bin/mimo-backup ./cmd/mimo-backup
 ```
 
 ## Быстрый старт

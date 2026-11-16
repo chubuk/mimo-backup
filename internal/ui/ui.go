@@ -235,13 +235,14 @@ func discoverIn(dirs []string) []ArchiveInfo {
 	return out
 }
 
-// classifyArtifact reports "secrets" for secrets containers (any suffix,
-// checked first), "main" for the main tar.gz, or "" for non-artifacts.
+// classifyArtifact reports "secrets" for secrets sidecars (checked first,
+// Bug D), "main" for the main archive — plain `.tar.gz` or the sealed
+// `.mimosec` container produced by `--encrypt` — or "" for non-artifacts.
 func classifyArtifact(p string) string {
 	switch {
-	case strings.HasSuffix(p, ".mimosec"), strings.HasSuffix(p, "-secrets.tar.gz"):
+	case strings.HasSuffix(p, "-secrets.mimosec"), strings.HasSuffix(p, "-secrets.tar.gz"):
 		return "secrets"
-	case strings.HasSuffix(p, ".tar.gz"):
+	case strings.HasSuffix(p, ".mimosec"), strings.HasSuffix(p, ".tar.gz"):
 		return "main"
 	}
 	return ""
