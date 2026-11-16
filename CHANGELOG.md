@@ -29,6 +29,9 @@
   выборочный restore (данные / + секреты).
 - Снапшот БД `VACUUM INTO` (hot) или cold-copy `db+wal+shm`.
 - bash-completion, SKILL.md для агентов MiMoCode.
+- **Поддержка macOS**: universal-инсталлятор `.pkg` (Apple Silicon + Intel),
+  терминальный ввод без эха через TIOCGETA, детектор процессов через `ps`
+  (fallback без /proc).
 
 ### Безопасность
 

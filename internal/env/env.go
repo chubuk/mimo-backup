@@ -53,7 +53,11 @@ func (r Roots) MimoBinary() string {
 
 // FindMimoProcesses scans /proc for processes whose comm is "mimo",
 // excluding self and the given ignore PIDs (e.g. children we spawned).
+// On macOS (no /proc) it falls back to `ps`.
 func FindMimoProcesses(ignore map[int]bool) []int {
+	if _, err := os.Stat("/proc"); err != nil {
+		return findMimoViaPS(ignore)
+	}
 	var pids []int
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -76,6 +80,38 @@ func FindMimoProcesses(ignore map[int]bool) []int {
 			continue
 		}
 		name := strings.TrimSpace(string(comm))
+		if name == "mimo" || strings.HasPrefix(name, "mimo") {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// findMimoViaPS is the macOS/BSD fallback: `ps -axo pid=,comm=`.
+func findMimoViaPS(ignore map[int]bool) []int {
+	out, err := exec.Command("ps", "-axo", "pid=,comm=").Output()
+	if err != nil {
+		return nil
+	}
+	self := os.Getpid()
+	var pids []int
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		sp := strings.SplitN(line, " ", 2)
+		if len(sp) != 2 {
+			continue
+		}
+		pid, err := strconv.Atoi(sp[0])
+		if err != nil {
+			continue
+		}
+		if pid == self || ignore[pid] {
+			continue
+		}
+		name := filepath.Base(strings.TrimSpace(sp[1]))
 		if name == "mimo" || strings.HasPrefix(name, "mimo") {
 			pids = append(pids, pid)
 		}
@@ -117,10 +153,11 @@ func isAlive(pid int) bool {
 	if err := syscall.Kill(pid, 0); err != nil {
 		return false
 	}
-	// kill 0 succeeds on zombies too; check the /proc state field.
+	// kill 0 succeeds on zombies too; check the /proc state field when
+	// available (Linux). On macOS there is no /proc — trust kill 0.
 	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
 	if err != nil {
-		return false
+		return true
 	}
 	// Format: pid (comm) state ...
 	s := string(b)

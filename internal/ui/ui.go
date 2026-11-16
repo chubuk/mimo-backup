@@ -12,9 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
-	"unsafe"
 
 	"github.com/chubuk/mimo-backup/internal/secbox"
 )
@@ -110,8 +108,7 @@ func (u *UI) ReadPassword(prompt string) (string, error) {
 	}
 	if isTTY {
 		noecho := *old
-		noecho.Lflag &^= syscall.ECHO
-		noecho.Lflag |= syscall.ECHONL
+		termiosNoEcho(&noecho)
 		if err := termiosSet(fd, &noecho); err != nil {
 			return "", err
 		}
@@ -160,29 +157,6 @@ func (u *UI) ReadPasswordOnce() (string, error) {
 		return "", err
 	}
 	return pw, nil
-}
-
-// termios helpers (Linux): TCGETS/TCSETS ioctls via syscall.
-type termios syscall.Termios
-
-func termiosGet(fd int) (*termios, bool, error) {
-	var t termios
-	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), syscall.TCGETS, uintptr(unsafe.Pointer(&t)), 0, 0, 0)
-	if errno != 0 {
-		if errno == syscall.ENOTTY {
-			return nil, false, nil // not a tty: echo-off is impossible, read plainly
-		}
-		return nil, false, fmt.Errorf("tcgets: %w", errno)
-	}
-	return &t, true, nil
-}
-
-func termiosSet(fd int, t *termios) error {
-	_, _, errno := syscall.Syscall6(syscall.SYS_IOCTL, uintptr(fd), syscall.TCSETS, uintptr(unsafe.Pointer(t)), 0, 0, 0)
-	if errno != 0 {
-		return fmt.Errorf("tcsets: %w", errno)
-	}
-	return nil
 }
 
 // ErrNotTTY reports password input attempted without a terminal.

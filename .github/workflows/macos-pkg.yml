@@ -1,0 +1,69 @@
+name: macos-pkg
+
+# Builds a universal (arm64 + amd64) macOS installer package on a macOS
+# runner (pkgbuild is macOS-only) and uploads it to a GitHub release.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to upload the .pkg to
+        required: true
+        default: v1.0.0
+      version:
+        description: Version stamped into the binary and package
+        required: true
+        default: 1.0.0
+
+jobs:
+  build:
+    runs-on: macos-14
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build universal binary
+        run: |
+          V="${{ inputs.version }}"
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X main.version=$V" -o dist/amd64 ./cmd/mimo-backup
+          CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X main.version=$V" -o dist/arm64 ./cmd/mimo-backup
+          lipo -create dist/amd64 dist/arm64 -output dist/mimo-backup
+          lipo -info dist/mimo-backup
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build installer package
+        run: |
+          V="${{ inputs.version }}"
+          ROOT=pkgroot
+          mkdir -p "$ROOT/usr/local/bin" \
+                   "$ROOT/usr/local/share/bash-completion/completions" \
+                   "$ROOT/usr/local/share/doc/mimo-backup"
+          cp dist/mimo-backup "$ROOT/usr/local/bin/"
+          cp completion/bash/mimo-backup "$ROOT/usr/local/share/bash-completion/completions/"
+          cp README.md SPEC.md CHANGELOG.md LICENSE "$ROOT/usr/local/share/doc/mimo-backup/"
+          pkgbuild \
+            --root "$ROOT" \
+            --identifier com.github.chubuk.mimo-backup \
+            --version "$V" \
+            --install-location / \
+            --ownership recommended \
+            "dist/mimo-backup-$V-macos.pkg"
+          pkgutil --check-signature "dist/mimo-backup-$V-macos.pkg" || true
+          ls -lh dist/*.pkg
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${{ inputs.version }}"
+          gh release upload "${{ inputs.tag }}" \
+            "dist/mimo-backup-$V-macos.pkg" \
+            dist/mimo-backup \
+            --clobber
