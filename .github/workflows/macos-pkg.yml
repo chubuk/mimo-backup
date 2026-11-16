@@ -2,6 +2,7 @@ name: macos-pkg
 
 # Builds a universal (arm64 + amd64) macOS installer package on a macOS
 # runner (pkgbuild is macOS-only) and uploads it to a GitHub release.
+# Trigger: manual dispatch, or push of a `pkg-*` tag (e.g. `pkg-1.0.0`).
 on:
   workflow_dispatch:
     inputs:
@@ -13,6 +14,13 @@ on:
         description: Version stamped into the binary and package
         required: true
         default: 1.0.0
+  push:
+    tags:
+      - "pkg-*"
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || 'v1.0.0' }}
+  VERSION: ${{ inputs.version || '1.0.0' }}
 
 jobs:
   build:
@@ -28,7 +36,7 @@ jobs:
 
       - name: Build universal binary
         run: |
-          V="${{ inputs.version }}"
+          V="${{ env.VERSION }}"
           mkdir -p dist
           CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags="-s -w -X main.version=$V" -o dist/amd64 ./cmd/mimo-backup
           CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w -X main.version=$V" -o dist/arm64 ./cmd/mimo-backup
@@ -40,7 +48,7 @@ jobs:
 
       - name: Build installer package
         run: |
-          V="${{ inputs.version }}"
+          V="${{ env.VERSION }}"
           ROOT=pkgroot
           mkdir -p "$ROOT/usr/local/bin" \
                    "$ROOT/usr/local/share/bash-completion/completions" \
@@ -62,8 +70,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          V="${{ inputs.version }}"
-          gh release upload "${{ inputs.tag }}" \
+          V="${{ env.VERSION }}"
+          gh release upload "${{ env.RELEASE_TAG }}" \
             "dist/mimo-backup-$V-macos.pkg" \
             dist/mimo-backup \
             --clobber
