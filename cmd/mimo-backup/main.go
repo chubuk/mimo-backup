@@ -21,7 +21,7 @@ import (
 )
 
 // version is stamped at build time via -ldflags "-X main.version=X.Y.Z".
-var version = "1.1.0"
+var version = "1.1.1"
 
 const (
 	exitOK       = 0
